@@ -1,0 +1,29 @@
+# Shared paths for the command scripts (sourced, not run directly).
+# Every variable can be overridden from the environment, e.g.
+#   PHD_ROOT=/Users/baiyinglu/Desktop/AugmentedHealthLab/phd_thesis bash run_baseline_a.sh
+
+PHD_ROOT=${PHD_ROOT:-/content/drive/Shareddrives/Baiying/phd_thesis}
+SAMPLES=${SAMPLES:-h12_f6_trs1_tes1}                     # which prepare_samples.py output to use
+CODE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../code" && pwd)"   # code next to this script (git clone)
+RUNS_DIR=${RUNS_DIR:-$PHD_ROOT/multivariate_baselines/runs}         # results stay on Drive
+SRC_DATA="$PHD_ROOT/multivariate_data_preprocessing/sample_prepare/samples/$SAMPLES"
+PYTHON=${PYTHON:-$(command -v python || command -v python3)}
+
+if [ ! -f "$SRC_DATA/test.npz" ]; then
+  echo "Samples not found: $SRC_DATA"
+  echo "Generate them first with multivariate_data_preprocessing/sample_prepare/prepare_samples.py"
+  exit 1
+fi
+
+# On Colab, copy the npz files from Drive to local disk once — reading ~700 MB from Drive is slow.
+if [ -d /content ] && [ "${COPY_TO_LOCAL:-1}" = "1" ]; then
+  DATA_DIR="/content/samples/$SAMPLES"
+  if [ ! -f "$DATA_DIR/test.npz" ]; then
+    echo "Copying samples to $DATA_DIR ..."
+    mkdir -p "$DATA_DIR.tmp"
+    cp "$SRC_DATA"/*.npz "$SRC_DATA"/config.json "$DATA_DIR.tmp"/
+    mv "$DATA_DIR.tmp" "$DATA_DIR"
+  fi
+else
+  DATA_DIR="$SRC_DATA"
+fi
