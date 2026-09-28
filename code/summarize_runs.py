@@ -1,12 +1,16 @@
 """
-Collect every finished run under runs_dir into two tables:
+Collect every finished run under one or more runs directories into two tables:
 
-    summary.csv            one row per run (config + test metrics)
-    summary_by_config.csv  mean ± std across seeds for each
-                           (features, norm, d_model, history, horizon)
+    {prefix}summary.csv            one row per run (config + test metrics)
+    {prefix}summary_by_config.csv  mean ± std across seeds for each
+                                   (features, norm, d_model, history, horizon)
+
+Tables are written to --out_dir (default: the first --runs_dir).
 
 Usage:
     python summarize_runs.py --runs_dir ../runs
+    # combined view written next to the new runs, leaving runs/summary*.csv untouched
+    python summarize_runs.py --runs_dir ../runs ../runs_c_bsteps --out_dir ../runs_c_bsteps --prefix combined_
 """
 
 import argparse
@@ -44,16 +48,24 @@ def load_run(run_dir: str) -> dict:
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--runs_dir", default=os.path.join(CODE_DIR, "..", "runs"))
+    p.add_argument("--runs_dir", nargs="+", default=[os.path.join(CODE_DIR, "..", "runs")],
+                   help="one or more folders containing run subfolders")
+    p.add_argument("--out_dir", default=None, help="where to write the tables (default: first --runs_dir)")
+    p.add_argument("--prefix", default="", help="filename prefix for the output tables")
     args = p.parse_args()
+    out_dir = args.out_dir or args.runs_dir[0]
+    os.makedirs(out_dir, exist_ok=True)
+    summary_path = os.path.join(out_dir, f"{args.prefix}summary.csv")
+    by_config_path = os.path.join(out_dir, f"{args.prefix}summary_by_config.csv")
 
-    run_dirs = sorted(os.path.dirname(f) for f in glob.glob(os.path.join(args.runs_dir, "*", "metrics.json")))
+    run_dirs = sorted(os.path.dirname(f) for rd in args.runs_dir
+                      for f in glob.glob(os.path.join(rd, "*", "metrics.json")))
     if not run_dirs:
         print(f"No finished runs in {args.runs_dir}")
         return
 
     runs = pd.DataFrame([load_run(d) for d in run_dirs]).sort_values(CONFIG_KEYS + ["seed"])
-    runs.to_csv(os.path.join(args.runs_dir, "summary.csv"), index=False)
+    runs.to_csv(summary_path, index=False)
 
     metric_cols = [c for c in runs.columns if c.startswith("rmse") or c in ("mae", "subject_mean_rmse")]
     grouped = runs.groupby(CONFIG_KEYS, sort=False)
@@ -63,7 +75,7 @@ def main():
     by_config.insert(1, "n_params", grouped["n_params"].first())
     by_config.insert(2, "persistence_rmse", grouped["persistence_rmse"].first())
     by_config = by_config.reset_index()
-    by_config.to_csv(os.path.join(args.runs_dir, "summary_by_config.csv"), index=False)
+    by_config.to_csv(by_config_path, index=False)
 
     view = by_config[CONFIG_KEYS + ["n_seeds", "n_params"]].copy()
     for m in ("rmse", "mae", "subject_mean_rmse"):
@@ -71,7 +83,7 @@ def main():
     view["persistence_rmse"] = by_config["persistence_rmse"].map("{:.2f}".format)
     pd.set_option("display.width", 200)
     print(view.to_string(index=False))
-    print(f"\nSaved {len(runs)} runs → {args.runs_dir}/summary.csv, summary_by_config.csv")
+    print(f"\nSaved {len(runs)} runs → {summary_path}, {by_config_path}")
 
 
 if __name__ == "__main__":

@@ -39,7 +39,12 @@ from metrics import evaluate
 from model import TransformerForecaster, count_parameters
 
 CODE_DIR = os.path.dirname(os.path.abspath(__file__))
-BASELINE_TAGS = {("bg",): "A", ("bg", "carbs", "bolus"): "B"}
+BASELINE_TAGS = {
+    ("bg",): "A",
+    ("bg", "carbs", "bolus"): "B",
+    ("bg", "iob", "cob"): "C",
+    ("bg", "carbs", "bolus", "steps"): "Bsteps",
+}
 
 
 def parse_args():

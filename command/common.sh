@@ -5,7 +5,8 @@
 PHD_ROOT=${PHD_ROOT:-/content/drive/Shareddrives/Baiying/phd_thesis}
 SAMPLES=${SAMPLES:-h12_f6_trs1_tes1}                     # which prepare_samples.py output to use
 CODE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../code" && pwd)"   # code next to this script (git clone)
-RUNS_DIR=${RUNS_DIR:-$PHD_ROOT/multivariate_baselines/runs}         # results stay on Drive
+RUNS_SUBDIR=${RUNS_SUBDIR:-runs}                                    # set by scripts that keep their own results folder
+RUNS_DIR=${RUNS_DIR:-$PHD_ROOT/multivariate_baselines/$RUNS_SUBDIR} # results stay on Drive
 SRC_DATA="$PHD_ROOT/multivariate_data_preprocessing/sample_prepare/samples/$SAMPLES"
 PYTHON=${PYTHON:-$(command -v python || command -v python3)}
 
