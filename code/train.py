@@ -44,6 +44,7 @@ BASELINE_TAGS = {
     ("bg", "carbs", "bolus"): "B",
     ("bg", "iob", "cob"): "C",
     ("bg", "carbs", "bolus", "steps"): "Bsteps",
+    ("bg", "iob", "cob", "smoothed_step"): "Csteps",
 }
 
 
