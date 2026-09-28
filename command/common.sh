@@ -8,7 +8,8 @@ CODE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../code" && pwd)"   # code next t
 RUNS_SUBDIR=${RUNS_SUBDIR:-runs}                                    # set by scripts that keep their own results folder
 RUNS_DIR=${RUNS_DIR:-$PHD_ROOT/multivariate_baselines/$RUNS_SUBDIR} # results stay on Drive
 PREPROC_DIR="$PHD_ROOT/multivariate_data_preprocessing"
-SAMPLES_ROOT="$PREPROC_DIR/sample_prepare/samples"
+SAMPLES_SUBDIR=${SAMPLES_SUBDIR:-samples}                           # folder under sample_prepare/ holding the sample sets
+SAMPLES_ROOT="$PREPROC_DIR/sample_prepare/$SAMPLES_SUBDIR"
 PYTHON=${PYTHON:-$(command -v python || command -v python3)}
 
 # On Colab, samples are read from local disk — reading GBs from Drive is slow.
@@ -34,6 +35,9 @@ use_samples() {
   echo "Copying samples to $DATA_DIR ..."
   mkdir -p "$DATA_DIR.tmp"
   cp "$src"/*.npz "$src"/config.json "$DATA_DIR.tmp"/
+  if [ -f "$src/summary.csv" ]; then
+    cp "$src/summary.csv" "$DATA_DIR.tmp"/
+  fi
   mv "$DATA_DIR.tmp" "$DATA_DIR"
 }
 

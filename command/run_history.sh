@@ -8,8 +8,11 @@
 #
 # The six sample sets are aligned (--min_history 48 --min_horizon 12): they share the same
 # forecast origins and, per horizon, the same targets — only the input length differs.
-# They are built on the fly from the combined/upgrade_filter_{train,test} CSVs on Drive into
-# /content/samples/ (≈ 7.5 GB for all six on local disk; nothing large is written to Drive).
+# Each set h{H}_f{F}_trs1_tes1_mh48_mf12 is taken from, in order:
+#   1. /content/samples/<set>/                         (already on local disk this session)
+#   2. sample_prepare/new_sample/<set>/ on Drive       (uploaded; copied to local disk)
+#   3. built from combined/upgrade_filter_{train,test} with prepare_samples.py (fallback)
+# All six sets take ≈ 7.5 GB of local disk.
 #
 # Results: runs_history/{A|Bsteps|Csteps}_scaled_d64_h{H}_f{F}_seed{S}/
 #          runs_history/summary.csv, summary_by_config.csv
@@ -23,6 +26,7 @@
 #   !bash {REPO}/command/run_history.sh --max_epochs 1              # extra arguments go to train.py
 set -euo pipefail
 RUNS_SUBDIR=${RUNS_SUBDIR:-runs_history}
+SAMPLES_SUBDIR=${SAMPLES_SUBDIR:-new_sample}
 DEFER_SAMPLES=1
 source "$(dirname "$0")/common.sh"
 SEEDS=${SEEDS:-"0 1 2"}
@@ -34,20 +38,24 @@ EXTRA_ARGS=("$@")
 PREP_SCRIPT="$PREPROC_DIR/sample_prepare/prepare_samples.py"
 COMBINED_DIR="$PREPROC_DIR/combined"
 
-# ── preflight ────────────────────────────────────────────────────────────────
-if [ ! -f "$PREP_SCRIPT" ] || ! grep -q -- "--min_history" "$PREP_SCRIPT"; then
-  echo "Need the updated prepare_samples.py (with --min_history) at $PREP_SCRIPT"
-  exit 1
-fi
-for split in upgrade_filter_train upgrade_filter_test; do
-  if [ ! -d "$COMBINED_DIR/$split" ]; then
-    echo "Missing $COMBINED_DIR/$split — upload the combined CSVs first"
-    exit 1
-  fi
-done
 mkdir -p "$RUNS_DIR"
 
-# ensure_samples <history> <horizon>: set DATA_DIR to the aligned sample set, building it if needed
+# Only needed when a sample set is neither on local disk nor uploaded to Drive
+check_can_build() {
+  if [ ! -f "$PREP_SCRIPT" ] || ! grep -q -- "--min_history" "$PREP_SCRIPT"; then
+    echo "Sample set not found in $SAMPLES_ROOT and cannot build it:"
+    echo "need the updated prepare_samples.py (with --min_history) at $PREP_SCRIPT"
+    exit 1
+  fi
+  for split in upgrade_filter_train upgrade_filter_test; do
+    if [ ! -d "$COMBINED_DIR/$split" ]; then
+      echo "Sample set not found in $SAMPLES_ROOT and cannot build it: missing $COMBINED_DIR/$split"
+      exit 1
+    fi
+  done
+}
+
+# ensure_samples <history> <horizon>: set DATA_DIR to the aligned sample set (local → Drive → build)
 ensure_samples() {
   local h=$1 f=$2
   local name="h${h}_f${f}_trs1_tes1_mh${MIN_HISTORY}_mf${MIN_HORIZON}"
@@ -56,6 +64,7 @@ ensure_samples() {
     if [ -f "$SAMPLES_ROOT/$name/test.npz" ]; then
       use_samples "$name"
     else
+      check_can_build
       echo "Building samples $name ..."
       "$PYTHON" "$PREP_SCRIPT" --data_root "$COMBINED_DIR" --history "$h" --horizon "$f" \
         --min_history "$MIN_HISTORY" --min_horizon "$MIN_HORIZON" --out_dir "$DATA_DIR"
