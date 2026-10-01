@@ -8,6 +8,13 @@ from prepare_samples.py.
 Examples:
     python train.py --data_dir <samples/h12_f6_trs1_tes1> --features bg --norm scaled --seed 0
     python train.py --data_dir <...> --features bg carbs bolus --norm none --d_model 128
+    python train.py --data_dir <...> --features bg --loss_target last   # train on the endpoint only
+
+--loss_target:
+    all   the model outputs all F horizon steps; MSE over every step (default)
+    last  the model outputs a single value — the endpoint, which is the evaluation
+          target — and is trained, validated and early-stopped on it alone. In the
+          saved predictions and per-step metrics the earlier steps are NaN.
 
 Outputs (runs_dir/run_name/):
     config.json           arguments, sample counts, parameter count, best epoch, status
@@ -73,12 +80,15 @@ def parse_args():
     p.add_argument("--lr_factor", type=float, default=0.5)
     p.add_argument("--min_lr", type=float, default=1e-6)
     p.add_argument("--grad_clip", type=float, default=0.0, help="max grad norm; 0 disables")
+    p.add_argument("--loss_target", choices=("all", "last"), default="all",
+                   help="all: predict and train on every horizon step; "
+                        "last: predict and train on the endpoint only (default: all)")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--device", default="auto", help="auto | cuda | mps | cpu")
     # output
     p.add_argument("--runs_dir", default=os.path.join(CODE_DIR, "..", "runs"))
     p.add_argument("--run_name", default=None,
-                   help="default: {A|B|features}_{norm}_d{d_model}_h{history}_f{horizon}_seed{seed}")
+                   help="default: {A|B|features}_{norm}_d{d_model}_h{history}_f{horizon}[_losslast]_seed{seed}")
     p.add_argument("--skip_existing", action="store_true", help="exit if this run already has metrics.json")
     args = p.parse_args()
 
@@ -105,7 +115,8 @@ def set_seed(seed: int) -> None:
 
 def default_run_name(args, history: int, horizon: int) -> str:
     tag = BASELINE_TAGS.get(tuple(args.features), "-".join(args.features))
-    return f"{tag}_{args.norm}_d{args.d_model}_h{history}_f{horizon}_seed{args.seed}"
+    loss = "" if args.loss_target == "all" else f"_loss{args.loss_target}"   # "all" keeps the original names
+    return f"{tag}_{args.norm}_d{args.d_model}_h{history}_f{horizon}{loss}_seed{args.seed}"
 
 
 def history_horizon(data_dir: str):
@@ -145,9 +156,13 @@ def main():
     splits = {s: load_split(args.data_dir, s, args.features) for s in ("train", "valid", "test")}
     norm = Normalizer.fit(args.norm, args.features, splits["train"])
 
+    # Training targets: the whole trajectory, or only the endpoint for --loss_target last
+    target_cols = slice(None) if args.loss_target == "all" else slice(-1, None)
+    n_out = horizon if args.loss_target == "all" else 1
+
     def to_device(split):
         X = torch.from_numpy(norm.transform_x(splits[split]["X"])).to(device)
-        y = torch.from_numpy(norm.transform_y(splits[split]["y"])).to(device)
+        y = torch.from_numpy(norm.transform_y(splits[split]["y"][:, target_cols])).to(device)
         return X, y
 
     X_train, y_train = to_device("train")
@@ -158,7 +173,7 @@ def main():
 
     # ── model ───────────────────────────────────────────────────────────────
     model_kwargs = dict(
-        c_in=len(args.features), t_in=history, t_out=horizon, d_model=args.d_model,
+        c_in=len(args.features), t_in=history, t_out=n_out, d_model=args.d_model,
         n_heads=args.n_heads, n_layers=args.n_layers, ffn_mult=args.ffn_mult,
         dropout=args.dropout, norm_first=not args.post_ln,
     )
@@ -207,7 +222,7 @@ def main():
         train_loss = (loss_sum / n_train).item()
 
         pred_valid = predict(model, X_valid, args.eval_batch_size)
-        valid_loss = F.mse_loss(pred_valid, y_valid).item()
+        valid_loss = F.mse_loss(pred_valid, y_valid).item()   # same target as training → drives early stopping
         pred_valid_mgdl = norm.inverse_y(pred_valid[:, -1].cpu().numpy())
         valid_rmse = float(np.sqrt(np.mean((pred_valid_mgdl - y_valid_mgdl) ** 2)))
         lr = optimizer.param_groups[0]["lr"]
@@ -242,10 +257,14 @@ def main():
 
     # ── test evaluation (mg/dL) ─────────────────────────────────────────────
     test = splits["test"]
-    y_pred = norm.inverse_y(predict(model, X_test, args.eval_batch_size).cpu().numpy())
+    y_out = norm.inverse_y(predict(model, X_test, args.eval_batch_size).cpu().numpy())
+    # Keep the (N, horizon) layout for metrics and saved predictions; an endpoint-only
+    # model fills the last column and leaves the earlier steps as NaN.
+    y_pred = np.full(test["y"].shape, np.nan, dtype=np.float32)
+    y_pred[:, -n_out:] = y_out
     metrics, per_subject = evaluate(test["y"], y_pred, test["last_bg"],
                                     test["subject"], test["dataset"], test["target_window"])
-    metrics.update(run_name=run_name, best_epoch=best_epoch, status=status)
+    metrics.update(run_name=run_name, best_epoch=best_epoch, status=status, loss_target=args.loss_target)
 
     write_json(os.path.join(out_dir, "metrics.json"), metrics)
     per_subject.to_csv(os.path.join(out_dir, "per_subject.csv"), index=False)

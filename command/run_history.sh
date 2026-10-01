@@ -32,50 +32,8 @@ source "$(dirname "$0")/common.sh"
 SEEDS=${SEEDS:-"0 1 2"}
 HISTORIES=${HISTORIES:-"12 24 48"}
 HORIZONS=${HORIZONS:-"6 12"}
-MIN_HISTORY=48
-MIN_HORIZON=12
 EXTRA_ARGS=("$@")
-PREP_SCRIPT="$PREPROC_DIR/sample_prepare/prepare_samples.py"
-COMBINED_DIR="$PREPROC_DIR/combined"
-
 mkdir -p "$RUNS_DIR"
-
-# Only needed when a sample set is neither on local disk nor uploaded to Drive
-check_can_build() {
-  if [ ! -f "$PREP_SCRIPT" ] || ! grep -q -- "--min_history" "$PREP_SCRIPT"; then
-    echo "Sample set not found in $SAMPLES_ROOT and cannot build it:"
-    echo "need the updated prepare_samples.py (with --min_history) at $PREP_SCRIPT"
-    exit 1
-  fi
-  for split in upgrade_filter_train upgrade_filter_test; do
-    if [ ! -d "$COMBINED_DIR/$split" ]; then
-      echo "Sample set not found in $SAMPLES_ROOT and cannot build it: missing $COMBINED_DIR/$split"
-      exit 1
-    fi
-  done
-}
-
-# ensure_samples <history> <horizon>: set DATA_DIR to the aligned sample set (local → Drive → build)
-ensure_samples() {
-  local h=$1 f=$2
-  local name="h${h}_f${f}_trs1_tes1_mh${MIN_HISTORY}_mf${MIN_HORIZON}"
-  DATA_DIR="$LOCAL_SAMPLES_ROOT/$name"
-  if [ ! -f "$DATA_DIR/config.json" ]; then           # config.json is written last
-    if [ -f "$SAMPLES_ROOT/$name/test.npz" ]; then
-      use_samples "$name"
-    else
-      check_can_build
-      echo "Building samples $name ..."
-      "$PYTHON" "$PREP_SCRIPT" --data_root "$COMBINED_DIR" --history "$h" --horizon "$f" \
-        --min_history "$MIN_HISTORY" --min_horizon "$MIN_HORIZON" --out_dir "$DATA_DIR"
-    fi
-  fi
-  mkdir -p "$RUNS_DIR/_samples/$name"
-  cp "$DATA_DIR/config.json" "$RUNS_DIR/_samples/$name/"
-  if [ -f "$DATA_DIR/summary.csv" ]; then
-    cp "$DATA_DIR/summary.csv" "$RUNS_DIR/_samples/$name/"
-  fi
-}
 
 run() {  # run <seed> <features...>
   local seed=$1
@@ -90,7 +48,7 @@ run() {  # run <seed> <features...>
 for seed in $SEEDS; do
   for f in $HORIZONS; do
     for h in $HISTORIES; do
-      ensure_samples "$h" "$f"
+      ensure_aligned_samples "$h" "$f"
       run "$seed" bg                              # A
       run "$seed" bg carbs bolus steps            # B + steps
       run "$seed" bg iob cob smoothed_step        # C + steps

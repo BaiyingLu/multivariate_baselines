@@ -13,6 +13,9 @@ Usage:
     python summarize_runs.py --runs_dir ../runs ../runs_c_bsteps --out_dir ../runs_c_bsteps --prefix combined_
     # per-window RMSE tables (5 merged + 9 fine-grained windows) and test-sample counts per window
     python summarize_runs.py --runs_dir ../runs_history --windows
+    # only some runs: --where key=value (repeatable; keys are summary.csv columns)
+    python summarize_runs.py --runs_dir ../runs_history ../runs_loss_target --out_dir ../runs_loss_target \
+        --prefix combined_ --where history=24 --where d_model=64
 """
 
 import argparse
@@ -23,8 +26,10 @@ import os
 import pandas as pd
 
 CODE_DIR = os.path.dirname(os.path.abspath(__file__))
-# "samples" (the sample-set folder name) keeps aligned and non-aligned sample sets apart
-CONFIG_KEYS = ["features", "norm", "d_model", "history", "horizon", "samples"]
+# "samples" (the sample-set folder name) keeps aligned and non-aligned sample sets apart;
+# "loss_target" keeps multi-step and endpoint-only training apart
+CONFIG_KEYS = ["features", "norm", "d_model", "history", "horizon", "loss_target", "samples"]
+TABLE_INDEX = ["norm", "d_model", "loss_target", "features"]
 PIVOT_METRICS = ["rmse", "rmse_30min", "rmse_MEAL", "rmse_Mix", "rmse_BASELINE+NOCTURNAL"]
 # event windows at the target timestamp: merged buckets (metrics["by_window_agg"]) and raw labels (metrics["by_window"])
 MERGED_WINDOWS = ["BASELINE+NOCTURNAL", "BOLUS", "EXERCISE", "MEAL", "Mix"]
@@ -42,6 +47,7 @@ def load_run(run_dir: str) -> dict:
         "run_name": cfg["run_name"], "features": " ".join(cfg["features"]), "norm": cfg["norm"],
         "d_model": cfg["d_model"], "history": cfg["history"], "horizon": cfg["horizon"],
         "samples": os.path.basename(os.path.normpath(cfg["data_dir"])),
+        "loss_target": cfg.get("loss_target", "all"),   # runs before --loss_target existed used "all"
         "seed": cfg["seed"], "n_params": cfg["n_params"], "status": m["status"],
         "best_epoch": m["best_epoch"], "train_min": round(cfg.get("train_seconds", float("nan")) / 60, 1),
         "rmse": m["overall"]["rmse"], "mae": m["overall"]["mae"],
@@ -62,7 +68,7 @@ def load_run(run_dir: str) -> dict:
 
 def print_window_tables(runs: pd.DataFrame, by_config: pd.DataFrame) -> None:
     """Per horizon: RMSE (mean over seeds) for merged and fine windows, plus test-sample counts."""
-    index = ["norm", "d_model", "features", "history"]
+    index = TABLE_INDEX + ["history"]
     for horizon in sorted(by_config["horizon"].unique()):
         sub = by_config[by_config["horizon"] == horizon]
         for title, windows in (("merged windows", ["overall"] + MERGED_WINDOWS), ("fine windows", FINE_WINDOWS)):
@@ -90,6 +96,8 @@ def main():
                    help="also print metric tables with rows (horizon, features) and columns history")
     p.add_argument("--windows", action="store_true",
                    help="also print RMSE per event window (merged and fine-grained) and sample counts")
+    p.add_argument("--where", action="append", default=[], metavar="KEY=VALUE",
+                   help="keep only runs whose summary column KEY equals VALUE (repeatable)")
     args = p.parse_args()
     out_dir = args.out_dir or args.runs_dir[0]
     os.makedirs(out_dir, exist_ok=True)
@@ -102,7 +110,16 @@ def main():
         print(f"No finished runs in {args.runs_dir}")
         return
 
-    runs = pd.DataFrame([load_run(d) for d in run_dirs]).sort_values(CONFIG_KEYS + ["seed"])
+    runs = pd.DataFrame([load_run(d) for d in run_dirs])
+    for cond in args.where:
+        key, _, value = cond.partition("=")
+        if key not in runs:
+            p.error(f"--where: unknown column '{key}'")
+        runs = runs[runs[key].astype(str) == value]
+    if runs.empty:
+        print(f"No runs left after --where {args.where}")
+        return
+    runs = runs.sort_values(CONFIG_KEYS + ["seed"])
     runs.to_csv(summary_path, index=False)
 
     metric_cols = [c for c in runs.columns if c.startswith("rmse") or c in ("mae", "subject_mean_rmse")]
@@ -115,7 +132,8 @@ def main():
     by_config = by_config.reset_index()
     by_config.to_csv(by_config_path, index=False)
 
-    shown_keys = [k for k in CONFIG_KEYS if k != "samples" or by_config["samples"].nunique() > 1]
+    shown_keys = [k for k in CONFIG_KEYS
+                  if k not in ("samples", "loss_target") or by_config[k].nunique() > 1]
     view = by_config[shown_keys + ["n_seeds", "n_params"]].copy()
     for m in ("rmse", "mae", "subject_mean_rmse"):
         view[m] = by_config[f"{m}_mean"].map("{:.2f}".format) + " ± " + by_config[f"{m}_std"].fillna(0).map("{:.2f}".format)
@@ -127,7 +145,7 @@ def main():
         for m in PIVOT_METRICS:
             if f"{m}_mean" not in by_config:
                 continue
-            table = by_config.pivot_table(index=["norm", "d_model", "horizon", "features"],
+            table = by_config.pivot_table(index=["horizon"] + TABLE_INDEX,
                                           columns="history", values=f"{m}_mean")
             print(f"\n{m} (mean over seeds) — columns: history steps")
             print(table.round(2).to_string())

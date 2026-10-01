@@ -41,7 +41,53 @@ use_samples() {
   mv "$DATA_DIR.tmp" "$DATA_DIR"
 }
 
-# Scripts that switch between several sample sets set DEFER_SAMPLES=1 and call use_samples themselves.
+# ── Aligned sample sets (history × horizon experiments) ──────────────────────
+# h{H}_f{F}_trs1_tes1_mh48_mf12: all sets share the same forecast origins.
+MIN_HISTORY=${MIN_HISTORY:-48}
+MIN_HORIZON=${MIN_HORIZON:-12}
+PREP_SCRIPT="$PREPROC_DIR/sample_prepare/prepare_samples.py"
+COMBINED_DIR="$PREPROC_DIR/combined"
+
+# Only needed when a sample set is neither on local disk nor uploaded to Drive
+check_can_build() {
+  if [ ! -f "$PREP_SCRIPT" ] || ! grep -q -- "--min_history" "$PREP_SCRIPT"; then
+    echo "Sample set not found in $SAMPLES_ROOT and cannot build it:"
+    echo "need the updated prepare_samples.py (with --min_history) at $PREP_SCRIPT"
+    exit 1
+  fi
+  for split in upgrade_filter_train upgrade_filter_test; do
+    if [ ! -d "$COMBINED_DIR/$split" ]; then
+      echo "Sample set not found in $SAMPLES_ROOT and cannot build it: missing $COMBINED_DIR/$split"
+      exit 1
+    fi
+  done
+}
+
+# ensure_aligned_samples <history> <horizon>: set DATA_DIR (local disk → uploaded on Drive → build),
+# and keep a copy of the sample set's config / per-subject counts in $RUNS_DIR/_samples/
+ensure_aligned_samples() {
+  local h=$1 f=$2
+  local name="h${h}_f${f}_trs1_tes1_mh${MIN_HISTORY}_mf${MIN_HORIZON}"
+  DATA_DIR="$LOCAL_SAMPLES_ROOT/$name"
+  if [ ! -f "$DATA_DIR/config.json" ]; then           # config.json is written last
+    if [ -f "$SAMPLES_ROOT/$name/test.npz" ]; then
+      use_samples "$name"
+    else
+      check_can_build
+      echo "Building samples $name ..."
+      "$PYTHON" "$PREP_SCRIPT" --data_root "$COMBINED_DIR" --history "$h" --horizon "$f" \
+        --min_history "$MIN_HISTORY" --min_horizon "$MIN_HORIZON" --out_dir "$DATA_DIR"
+    fi
+  fi
+  mkdir -p "$RUNS_DIR/_samples/$name"
+  cp "$DATA_DIR/config.json" "$RUNS_DIR/_samples/$name/"
+  if [ -f "$DATA_DIR/summary.csv" ]; then
+    cp "$DATA_DIR/summary.csv" "$RUNS_DIR/_samples/$name/"
+  fi
+}
+
+# Scripts that switch between several sample sets set DEFER_SAMPLES=1 and call
+# use_samples / ensure_aligned_samples themselves.
 if [ "${DEFER_SAMPLES:-0}" != "1" ]; then
   use_samples "$SAMPLES" || exit 1
 fi
