@@ -11,6 +11,8 @@ Usage:
     python summarize_runs.py --runs_dir ../runs
     # combined view written next to the new runs, leaving runs/summary*.csv untouched
     python summarize_runs.py --runs_dir ../runs ../runs_c_bsteps --out_dir ../runs_c_bsteps --prefix combined_
+    # per-window RMSE tables (5 merged + 9 fine-grained windows) and test-sample counts per window
+    python summarize_runs.py --runs_dir ../runs_history --windows
 """
 
 import argparse
@@ -24,6 +26,10 @@ CODE_DIR = os.path.dirname(os.path.abspath(__file__))
 # "samples" (the sample-set folder name) keeps aligned and non-aligned sample sets apart
 CONFIG_KEYS = ["features", "norm", "d_model", "history", "horizon", "samples"]
 PIVOT_METRICS = ["rmse", "rmse_30min", "rmse_MEAL", "rmse_Mix", "rmse_BASELINE+NOCTURNAL"]
+# event windows at the target timestamp: merged buckets (metrics["by_window_agg"]) and raw labels (metrics["by_window"])
+MERGED_WINDOWS = ["BASELINE+NOCTURNAL", "BOLUS", "EXERCISE", "MEAL", "Mix"]
+FINE_WINDOWS = ["STABLE_BASELINE", "NOCTURNAL", "MEAL", "BOLUS", "EXERCISE",
+                "MEAL+BOLUS", "MEAL+EXERCISE", "BOLUS+EXERCISE", "MEAL+BOLUS+EXERCISE"]
 
 
 def load_run(run_dir: str) -> dict:
@@ -47,9 +53,31 @@ def load_run(run_dir: str) -> dict:
     }
     for ds, v in m["by_dataset"].items():
         row[f"rmse_{ds}"] = v["rmse"]
-    for w, v in m["by_window_agg"].items():
+    # MEAL / BOLUS / EXERCISE appear in both dicts with identical values
+    for w, v in {**m["by_window"], **m["by_window_agg"]}.items():
         row[f"rmse_{w}"] = v["rmse"]
+        row[f"n_{w}"] = v["n"]
     return row
+
+
+def print_window_tables(runs: pd.DataFrame, by_config: pd.DataFrame) -> None:
+    """Per horizon: RMSE (mean over seeds) for merged and fine windows, plus test-sample counts."""
+    index = ["norm", "d_model", "features", "history"]
+    for horizon in sorted(by_config["horizon"].unique()):
+        sub = by_config[by_config["horizon"] == horizon]
+        for title, windows in (("merged windows", ["overall"] + MERGED_WINDOWS), ("fine windows", FINE_WINDOWS)):
+            cols = {("rmse_mean" if w == "overall" else f"rmse_{w}_mean"): w for w in windows}
+            cols = {c: w for c, w in cols.items() if c in sub}
+            table = sub.set_index(index)[list(cols)].rename(columns=cols).sort_index()
+            print(f"\nRMSE by {title}, horizon {horizon * 5} min (mean over seeds)")
+            print(table.round(2).to_string())
+
+        n_cols = [f"n_{w}" for w in MERGED_WINDOWS + FINE_WINDOWS if f"n_{w}" in runs]
+        counts = runs[runs["horizon"] == horizon].groupby("samples")[n_cols].first()
+        counts.columns = [c[2:] for c in n_cols]
+        counts = counts.loc[:, ~counts.columns.duplicated()]
+        print(f"\nTest samples per window, horizon {horizon * 5} min")
+        print(counts.to_string())
 
 
 def main():
@@ -60,6 +88,8 @@ def main():
     p.add_argument("--prefix", default="", help="filename prefix for the output tables")
     p.add_argument("--pivot", action="store_true",
                    help="also print metric tables with rows (horizon, features) and columns history")
+    p.add_argument("--windows", action="store_true",
+                   help="also print RMSE per event window (merged and fine-grained) and sample counts")
     args = p.parse_args()
     out_dir = args.out_dir or args.runs_dir[0]
     os.makedirs(out_dir, exist_ok=True)
@@ -101,6 +131,9 @@ def main():
                                           columns="history", values=f"{m}_mean")
             print(f"\n{m} (mean over seeds) — columns: history steps")
             print(table.round(2).to_string())
+
+    if args.windows:
+        print_window_tables(runs, by_config)
 
     print(f"\nSaved {len(runs)} runs → {summary_path}, {by_config_path}")
 
